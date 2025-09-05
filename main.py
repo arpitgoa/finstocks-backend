@@ -6,12 +6,13 @@ from dotenv import load_dotenv
 
 from models import Stock, StockPrice, Sector, Fundamentals, TechnicalIndicators, ScreenerRequest
 from supabase_db import supabase_db
+from etf_routes import get_etf, get_etf_prices, get_all_etfs, get_etfs_by_category, get_leveraged_etfs
 
 load_dotenv()
 
 app = FastAPI(
     title="FinStocks API",
-    description="Financial stocks data API with screening and analysis",
+    description="Financial stocks and ETFs data API with screening and analysis",
     version="1.0.0"
 )
 
@@ -81,6 +82,16 @@ async def get_technical_indicators(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/stocks/{symbol}/etfs")
+async def get_stock_etfs(symbol: str):
+    """Get ETFs that hold this stock"""
+    try:
+        symbol = symbol.upper()
+        result = supabase_db.supabase.table('etf_holdings').select('*, etfs(name, category)').eq('stock_symbol', symbol).order('weight_percentage', desc=True).execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/stocks")
 async def create_stock(stock: Stock):
     """Add new stock"""
@@ -95,6 +106,52 @@ async def create_stock(stock: Stock):
         return {"id": result.data[0]["id"], "symbol": stock.symbol.upper()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ETF ENDPOINTS
+@app.get("/api/etfs")
+async def get_etfs():
+    """Get all ETFs"""
+    return get_all_etfs()
+
+@app.get("/api/etfs/{symbol}")
+async def get_etf_details(symbol: str):
+    """Get ETF details with latest price"""
+    return get_etf(symbol)
+
+@app.get("/api/etfs/{symbol}/prices")
+async def get_etf_price_history(symbol: str, days: int = 30):
+    """Get ETF price history"""
+    return get_etf_prices(symbol, days)
+
+@app.get("/api/etfs/{symbol}/holdings")
+async def get_etf_holdings(symbol: str, limit: int = 50):
+    """Get ETF holdings with stock weights"""
+    try:
+        symbol = symbol.upper()
+        result = supabase_db.supabase.table('etf_holdings').select('*, stocks(name, sector)').eq('etf_symbol', symbol).order('weight_percentage', desc=True).limit(limit).execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/etfs/{symbol}/top-holdings")
+async def get_etf_top_holdings(symbol: str, limit: int = 10):
+    """Get top holdings of an ETF"""
+    try:
+        symbol = symbol.upper()
+        result = supabase_db.supabase.table('etf_holdings').select('*, stocks(name, sector, market_cap)').eq('etf_symbol', symbol).order('weight_percentage', desc=True).limit(limit).execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/etfs/category/{category}")
+async def get_etfs_in_category(category: str):
+    """Get ETFs by category"""
+    return get_etfs_by_category(category)
+
+@app.get("/api/etfs/leveraged")
+async def get_leveraged_etf_list():
+    """Get leveraged ETFs (3x, etc.)"""
+    return get_leveraged_etfs()
 
 # SECTOR ENDPOINTS
 @app.get("/api/sectors")
