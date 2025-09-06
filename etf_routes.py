@@ -1,3 +1,5 @@
+from functools import lru_cache
+import time
 from fastapi import HTTPException
 from supabase_db import supabase_db
 
@@ -27,20 +29,48 @@ def get_etf(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@lru_cache(maxsize=100)
+def get_cached_etf_prices(symbol: str, days: int, cache_key: str):
+    """Cached ETF price data"""
+    start_time = time.time()
+    
+    symbol = symbol.upper()
+    result = supabase_db.supabase.table('etf_prices').select('*').eq('symbol', symbol).order('date', desc=True).limit(days).execute()
+    
+    end_time = time.time()
+    query_time = (end_time - start_time) * 1000
+    print(f"💹 Supabase ETF prices query for {symbol} took: {query_time:.2f}ms")
+    
+    return result.data
+
 def get_etf_prices(symbol: str, days: int = 30):
-    """Get ETF price history"""
+    """Get ETF price history - now cached"""
     try:
-        symbol = symbol.upper()
-        result = supabase_db.supabase.table('etf_prices').select('*').eq('symbol', symbol).order('date', desc=True).limit(days).execute()
-        return result.data
+        # Cache for 30 seconds
+        cache_key = str(int(time.time() // 30))
+        return get_cached_etf_prices(symbol, days, cache_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@lru_cache(maxsize=10)
+def get_cached_etfs_data(cache_key: str):
+    """Cached ETFs data"""
+    start_time = time.time()
+    
+    result = supabase_db.supabase.table('etfs').select('*').order('aum', desc=True).execute()
+    
+    end_time = time.time()
+    query_time = (end_time - start_time) * 1000
+    print(f"💰 Supabase ETFs query took: {query_time:.2f}ms")
+    
+    return result.data
+
 def get_all_etfs():
-    """Get all ETFs"""
+    """Get all ETFs - now cached"""
     try:
-        result = supabase_db.supabase.table('etfs').select('*').order('aum', desc=True).execute()
-        return result.data
+        # Cache for 30 seconds
+        cache_key = str(int(time.time() // 30))
+        return get_cached_etfs_data(cache_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import os
 from dotenv import load_dotenv
+from functools import lru_cache
+import time
 
 from models import Stock, StockPrice, Sector, Fundamentals, TechnicalIndicators, ScreenerRequest
 from supabase_db import supabase_db
@@ -154,29 +156,57 @@ async def get_leveraged_etf_list():
     return get_leveraged_etfs()
 
 # SECTOR ENDPOINTS
+@lru_cache(maxsize=10)
+def get_cached_all_sectors_data(cache_key: str):
+    """Cached all sectors data"""
+    start_time = time.time()
+    
+    result = supabase_db.get_sectors()
+    
+    end_time = time.time()
+    query_time = (end_time - start_time) * 1000
+    print(f"🏭 Supabase all sectors query took: {query_time:.2f}ms")
+    
+    return result.data
+
 @app.get("/api/sectors")
 async def get_sectors():
-    """Get all sectors performance"""
+    """Get all sectors performance - now cached"""
     try:
-        result = supabase_db.get_sectors()
-        return result.data
+        # Cache for 30 seconds
+        cache_key = str(int(time.time() // 30))
+        return get_cached_all_sectors_data(cache_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@lru_cache(maxsize=50)
+def get_cached_sectors_data(period: str, limit: int, cache_key: str):
+    """Cached sectors data"""
+    start_time = time.time()
+    
+    period_map = {
+        "1d": "performance_1d",
+        "1w": "performance_1w", 
+        "1m": "performance_1m",
+        "ytd": "performance_ytd"
+    }
+    
+    order_by = period_map.get(period, "performance_1d")
+    result = supabase_db.supabase.table('sectors').select('*').order(order_by, desc=True).limit(limit).execute()
+    
+    end_time = time.time()
+    query_time = (end_time - start_time) * 1000
+    print(f"📊 Supabase sectors query took: {query_time:.2f}ms")
+    
+    return result.data
+
 @app.get("/api/sectors/top-performers")
 async def get_top_sectors(period: str = "1d", limit: int = 5):
-    """Get top performing sectors"""
+    """Get top performing sectors - 30 second cache for real-time data"""
     try:
-        period_map = {
-            "1d": "performance_1d",
-            "1w": "performance_1w", 
-            "1m": "performance_1m",
-            "ytd": "performance_ytd"
-        }
-        
-        order_by = period_map.get(period, "performance_1d")
-        result = supabase_db.supabase.table('sectors').select('*').order(order_by, desc=True).limit(limit).execute()
-        return result.data
+        # Cache for 30 seconds
+        cache_key = str(int(time.time() // 30))
+        return get_cached_sectors_data(period, limit, cache_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -190,23 +220,46 @@ async def get_sector_stocks(sector_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # SCREENER ENDPOINTS
+@lru_cache(maxsize=100)
+def get_cached_screener_data(limit: int, sectors: str, min_cap: int, max_cap: int, cache_key: str):
+    """Cached screener data - simplified query for speed"""
+    start_time = time.time()
+    
+    # Simple query - just stocks table, no joins
+    query = supabase_db.supabase.table('stocks').select('symbol, name, sector, market_cap')
+    
+    if sectors and sectors != "None":
+        sector_list = sectors.split(",")
+        query = query.in_('sector', sector_list)
+    
+    if min_cap and min_cap > 0:
+        query = query.gte('market_cap', min_cap)
+    
+    if max_cap and max_cap > 0:
+        query = query.lte('market_cap', max_cap)
+    
+    result = query.limit(limit).execute()
+    
+    end_time = time.time()
+    query_time = (end_time - start_time) * 1000  # Convert to milliseconds
+    print(f"🔍 Supabase screener query took: {query_time:.2f}ms")
+    
+    return result.data
+
 @app.post("/api/screener")
 async def screen_stocks(request: ScreenerRequest):
-    """Screen stocks with filters"""
+    """Screen stocks with filters - 30 second cache for real-time data"""
     try:
-        query = supabase_db.supabase.table('stocks').select('*, stock_prices(*), fundamentals(*)')
+        # Create cache key that changes every 30 seconds
+        cache_key = str(int(time.time() // 30))  # 30 seconds for real-time
         
-        if request.sectors:
-            query = query.in_('sector', request.sectors)
+        # Convert request to cacheable parameters
+        sectors_str = ",".join(request.sectors) if request.sectors else "None"
+        min_cap = request.min_market_cap or 0
+        max_cap = request.max_market_cap or 0
+        limit = request.limit or 50
         
-        if request.min_market_cap:
-            query = query.gte('market_cap', request.min_market_cap)
-        
-        if request.max_market_cap:
-            query = query.lte('market_cap', request.max_market_cap)
-        
-        result = query.limit(request.limit or 50).execute()
-        return result.data
+        return get_cached_screener_data(limit, sectors_str, min_cap, max_cap, cache_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
